@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Microsoft/hcsshim"
+	"github.com/Microsoft/hcsshim/hcn"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/glog"
 
@@ -100,7 +101,8 @@ type serviceInfo struct {
 	hnsID                    string
 	nodePorthnsID            string
 	policyApplied            bool
-	remoteEndpoints          []*endpointsInfo
+	remoteEndpoint           endpointsInfo
+
 }
 
 type hnsNetworkInfo struct {
@@ -130,12 +132,23 @@ type endpointsInfo struct {
 	refCount   uint16
 }
 
+//Uses mac prefix and IPv4 address to return a mac address
+//This ensures mac addresses are unique for proper load balancing
+//Does not support IPv6 and returns a dummy mac
+func conjureMac(macPrefix string, ip net.IP) string {
+	if ip4 := ip.To4(); ip4 != nil {
+		a, b, c, d := ip4[0], ip4[1], ip4[2], ip4[3]
+		return fmt.Sprintf("%v-%02x-%02x-%02x-%02x", macPrefix, a, b, c, d)
+	}
+	return "02-11-22-33-44-55"
+}
+
 func newEndpointInfo(ip string, port uint16, isLocal bool) *endpointsInfo {
 	info := &endpointsInfo{
 		ip:         ip,
 		port:       port,
 		isLocal:    isLocal,
-		macAddress: "00:11:22:33:44:55", // Hardcoding to some Random Mac
+		macAddress: conjureMac("02-11", net.ParseIP(ip)),
 		refCount:   0,
 		hnsID:      "",
 	}
@@ -410,7 +423,6 @@ type Proxier struct {
 
 	network     hnsNetworkInfo
 	sourceVip   string
-	serviceVips map[string]*endpointsInfo
 	hostMac     string
 }
 
@@ -529,11 +541,7 @@ func (svcInfo *serviceInfo) cleanupAllPolicies(endpoints []*endpointsInfo) {
 		for _, ep := range endpoints {
 			ep.Cleanup()
 		}
-		for _, remoteEndpoint := range svcInfo.remoteEndpoints {
-			remoteEndpoint.Cleanup()
-			remoteEndpoint.hnsID = ""
-		}
-
+		svcInfo.remoteEndpoint.Cleanup()
 		svcInfo.policyApplied = false
 	}
 }
@@ -573,7 +581,7 @@ func deleteAllHnsLoadBalancerPolicy() {
 
 // getHnsLoadBalancer returns the LoadBalancer policy resource, if already found.
 // If not, it would create one and return
-func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
+func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, isDSR bool, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
 	plists, err := hcsshim.HNSListPolicyListRequest()
 	if err != nil {
 		return nil, err
@@ -603,6 +611,7 @@ func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, sourceVip s
 	lb, err := hcsshim.AddLoadBalancer(
 		endpoints,
 		isILB,
+		isDSR, //DSR
 		sourceVip,
 		vip,
 		protocol,
@@ -976,41 +985,44 @@ func (proxier *Proxier) syncProxyRules() {
 			continue
 		}
 
-		serviceVipEndpoint, err := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
+		if hnsnetwork.Type == "Overlay" {
+			serviceVipEndpoint, _ := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
 
-		if  serviceVipEndpoint == nil  {
-			hnsEndpoint := &hcsshim.HNSEndpoint{
-			MacAddress: proxier.hostMac,
-			IPAddress:  svcInfo.clusterIP,
-			}
+			if  serviceVipEndpoint == nil  {
+				hnsEndpoint := &hcsshim.HNSEndpoint{
+				MacAddress: proxier.hostMac,
+				IPAddress:  svcInfo.clusterIP,
+				}
 
-			paPolicy := hcsshim.PaPolicy{
-				Type: hcsshim.PA,
-				PA:   proxier.nodeIP.String(),
-			}
-			paPolicyJson, err := json.Marshal(paPolicy)
-			if err != nil {
-				glog.Errorf("PA Policy creation failed for service VIP remote endpoint: %v", err)
-				continue
-			}
-			hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
+				paPolicy := hcsshim.PaPolicy{
+					Type: hcsshim.PA,
+					PA:   proxier.nodeIP.String(),
+				}
+				paPolicyJson, err := json.Marshal(paPolicy)
+				if err != nil {
+					glog.Errorf("PA Policy creation failed for service VIP remote endpoint: %v", err)
+					continue
+				}
+				hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
 
-			newHnsEndpoint, err := hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
-			if err != nil {
-				glog.Errorf("Remote endpoint creation failed for service VIP: %v", err)
-				continue
-			}
+				newHnsEndpoint, err := hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
+				if err != nil {
+					glog.Errorf("Remote endpoint creation failed for service VIP: %v", err)
+					continue
+				}
 
 
-			epInfo := &endpointsInfo{
-				ip:         newHnsEndpoint.IPAddress.String(),
-				isLocal:    false,
-				macAddress: newHnsEndpoint.MacAddress,
-				refCount:   1,
-				hnsID:      newHnsEndpoint.Id,
+				epInfo := &endpointsInfo{
+					ip:         newHnsEndpoint.IPAddress.String(),
+					isLocal:    false,
+					macAddress: newHnsEndpoint.MacAddress,
+					refCount:   1,
+					hnsID:      newHnsEndpoint.Id,
+				}
+				svcInfo.remoteEndpoint = epInfo	
 			}
-			svcInfo.remoteEndpoints = append(svcInfo.remoteEndpoints, epInfo)	
 		}
+		
 		var hnsEndpoints []hcsshim.HNSEndpoint
 		glog.V(4).Infof("====Applying Policy for %s====", svcName)
 		// Create Remote endpoints for every endpoint, corresponding to the service
@@ -1042,19 +1054,59 @@ func (proxier *Proxier) syncProxyRules() {
 					continue
 				}
 
-				if hnsnetwork.Type == "Overlay" {
-					glog.V(2).Info("Not creating remote endpoints for overlay network")
-					continue
+				networkV2, err := hcn.GetNetworkByName(hnsNetworkName)
+				if err != nil {
+					glog.Errorf("%v", err)
 				}
 
+				var providerAddress string
+				for _, policy := range networkV2.Policies {
+					if policy.Type == hcn.RemoteSubnetRoute {
+						policySettings := hcn.RemoteSubnetRoutePolicySetting{}
+						err = json.Unmarshal(policy.Settings, &policySettings)
+						if err != nil {
+							glog.Infof("Failed to unmarshal settings")
+						}
+						glog.Infof("Found policy settings %v", policySettings)
+						
+						remoteSubnet := policySettings.DestinationPrefix
+
+						_, ipNet, err := net.ParseCIDR(remoteSubnet)
+						if err != nil {
+							glog.Errorf("%v", err)
+						}
+						if ipNet.Contains(net.ParseIP(ep.ip)) {
+							glog.Infof("Found ipnet", ipNet)
+							providerAddress = policySettings.ProviderAddress
+						}
+						if ep.ip == policySettings.ProviderAddress {
+							providerAddress = policySettings.ProviderAddress
+						}
+					}
+				}
+				if len(providerAddress) == 0 {
+							glog.Errorf("Could not find provider address for %s", ep.ip)
+				}
 				hnsEndpoint := &hcsshim.HNSEndpoint{
-					MacAddress: ep.macAddress,
+					MacAddress: conjureMac("02-11", net.ParseIP(ep.ip)),
 					IPAddress:  net.ParseIP(ep.ip),
 				}
 
+				paPolicy := hcsshim.PaPolicy{
+				Type: hcsshim.PA,
+				PA:   providerAddress,
+				}
+
+				paPolicyJson, err := json.Marshal(paPolicy)
+				if err != nil {
+					glog.Errorf("PA Policy creation failed for remote endpoint: %v", err)
+					continue
+				}
+				hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
+
 				newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
 				if err != nil {
-					glog.Errorf("Remote endpoint creation failed: %v", err)
+					glog.Errorf("Remote endpoint creation failed: %v, %s", err, spew.Sdump(hnsEndpoint))
 					continue
 				}
 			}
@@ -1085,6 +1137,7 @@ func (proxier *Proxier) syncProxyRules() {
 		hnsLoadBalancer, err = getHnsLoadBalancer(
 			hnsEndpoints,
 			false,
+			true,
 			proxier.sourceVip,
 			svcInfo.clusterIP.String(),
 			Enum(svcInfo.protocol),
@@ -1103,6 +1156,7 @@ func (proxier *Proxier) syncProxyRules() {
 		if svcInfo.nodePort > 0 {
 			hnsLoadBalancer, err := getHnsLoadBalancer(
 				hnsEndpoints,
+				false,
 				false,
 				proxier.sourceVip,
 				"", // VIP has to be empty to automatically select the nodeIP
@@ -1125,6 +1179,7 @@ func (proxier *Proxier) syncProxyRules() {
 			hnsLoadBalancer, err = getHnsLoadBalancer(
 				hnsEndpoints,
 				false,
+				false,
 				proxier.sourceVip,
 				externalIp.ip,
 				Enum(svcInfo.protocol),
@@ -1143,6 +1198,7 @@ func (proxier *Proxier) syncProxyRules() {
 			// Try loading existing policies, if already available
 			hnsLoadBalancer, err := getHnsLoadBalancer(
 				hnsEndpoints,
+				false,
 				false,
 				proxier.sourceVip,
 				lbIngressIp.ip,
