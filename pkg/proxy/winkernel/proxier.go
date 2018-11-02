@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/Microsoft/hcsshim"
-	"github.com/Microsoft/hcsshim/hcn"
+	//"github.com/Microsoft/hcsshim/hcn"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/glog"
 
@@ -101,8 +101,7 @@ type serviceInfo struct {
 	hnsID                    string
 	nodePorthnsID            string
 	policyApplied            bool
-	remoteEndpoint           endpointsInfo
-
+	remoteEndpoint          endpointsInfo
 }
 
 type hnsNetworkInfo struct {
@@ -183,10 +182,12 @@ func newServiceInfo(svcPortName proxy.ServicePortName, port *v1.ServicePort, ser
 		stickyMaxAgeSeconds = int(*service.Spec.SessionAffinityConfig.ClientIP.TimeoutSeconds)
 	}
 	info := &serviceInfo{
-		clusterIP:  net.ParseIP(service.Spec.ClusterIP),
-		port:       int(port.Port),
-		protocol:   port.Protocol,
-		nodePort:   int(port.NodePort),
+		clusterIP: net.ParseIP(service.Spec.ClusterIP),
+		port:      int(port.Port),
+		protocol:  port.Protocol,
+		nodePort:  int(port.NodePort),
+		// targetPort is zero if it is specified as a name in port.TargetPort.
+		// Its real value would be got later from endpoints.
 		targetPort: port.TargetPort.IntValue(),
 		// Deep-copy in case the service instance changes
 		loadBalancerStatus:       *service.Status.LoadBalancer.DeepCopy(),
@@ -444,6 +445,9 @@ func Enum(p v1.Protocol) uint16 {
 	if p == v1.ProtocolUDP {
 		return 17
 	}
+	if p == v1.ProtocolSCTP {
+		return 132
+	}
 	return 0
 }
 
@@ -544,6 +548,8 @@ func (svcInfo *serviceInfo) cleanupAllPolicies(endpoints []*endpointsInfo) {
 		svcInfo.remoteEndpoint.Cleanup()
 		svcInfo.policyApplied = false
 	}
+
+	svcInfo.policyApplied = false
 }
 
 func (svcInfo *serviceInfo) deleteAllHnsLoadBalancerPolicy() {
@@ -581,7 +587,7 @@ func deleteAllHnsLoadBalancerPolicy() {
 
 // getHnsLoadBalancer returns the LoadBalancer policy resource, if already found.
 // If not, it would create one and return
-func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, isDSR bool, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
+func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, isDSR bool, sourceVip string, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
 	plists, err := hcsshim.HNSListPolicyListRequest()
 	if err != nil {
 		return nil, err
@@ -611,7 +617,7 @@ func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, isDSR bool,
 	lb, err := hcsshim.AddLoadBalancer(
 		endpoints,
 		isILB,
-		isDSR, //DSR
+		isDSR,
 		sourceVip,
 		vip,
 		protocol,
@@ -986,7 +992,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		if hnsnetwork.Type == "Overlay" {
-			serviceVipEndpoint, _ := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
+			serviceVipEndpoint, err := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
 
 			if  serviceVipEndpoint == nil  {
 				hnsEndpoint := &hcsshim.HNSEndpoint{
@@ -1031,6 +1037,14 @@ func (proxier *Proxier) syncProxyRules() {
 			var newHnsEndpoint *hcsshim.HNSEndpoint
 			hnsNetworkName := proxier.network.name
 			var err error
+
+			// targetPort is zero if it is specified as a name in port.TargetPort, so the real port should be got from endpoints.
+			// Note that hcsshim.AddLoadBalancer() doesn't support endpoints with different ports, so only port from first endpoint is used.
+			// TODO(feiskyer): add support of different endpoint ports after hcsshim.AddLoadBalancer() add that.
+			if svcInfo.targetPort == 0 {
+				svcInfo.targetPort = int(ep.port)
+			}
+
 			if len(ep.hnsID) > 0 {
 				newHnsEndpoint, err = hcsshim.GetHNSEndpointByID(ep.hnsID)
 			}
@@ -1054,59 +1068,73 @@ func (proxier *Proxier) syncProxyRules() {
 					continue
 				}
 
-				networkV2, err := hcn.GetNetworkByName(hnsNetworkName)
-				if err != nil {
-					glog.Errorf("%v", err)
-				}
+				if hnsnetwork.Type == "Overlay" {
+					networkV2, err := hcn.GetNetworkByName(hnsNetworkName)
+					if err != nil {
+						glog.Errorf("%v", err)
+					}
 
-				var providerAddress string
-				for _, policy := range networkV2.Policies {
-					if policy.Type == hcn.RemoteSubnetRoute {
-						policySettings := hcn.RemoteSubnetRoutePolicySetting{}
-						err = json.Unmarshal(policy.Settings, &policySettings)
-						if err != nil {
-							glog.Infof("Failed to unmarshal settings")
-						}
-						glog.Infof("Found policy settings %v", policySettings)
-						
-						remoteSubnet := policySettings.DestinationPrefix
+					var providerAddress string
+					for _, policy := range networkV2.Policies {
+						if policy.Type == hcn.RemoteSubnetRoute {
+							policySettings := hcn.RemoteSubnetRoutePolicySetting{}
+							err = json.Unmarshal(policy.Settings, &policySettings)
+							if err != nil {
+								glog.Infof("Failed to unmarshal settings")
+							}
+							glog.Infof("Found policy settings %v", policySettings)
+							
+							remoteSubnet := policySettings.DestinationPrefix
 
-						_, ipNet, err := net.ParseCIDR(remoteSubnet)
-						if err != nil {
-							glog.Errorf("%v", err)
-						}
-						if ipNet.Contains(net.ParseIP(ep.ip)) {
-							glog.Infof("Found ipnet", ipNet)
-							providerAddress = policySettings.ProviderAddress
-						}
-						if ep.ip == policySettings.ProviderAddress {
-							providerAddress = policySettings.ProviderAddress
+							_, ipNet, err := net.ParseCIDR(remoteSubnet)
+							if err != nil {
+								glog.Errorf("%v", err)
+							}
+							if ipNet.Contains(net.ParseIP(ep.ip)) {
+								glog.Infof("Found ipnet", ipNet)
+								providerAddress = policySettings.ProviderAddress
+							}
+							if ep.ip == policySettings.ProviderAddress {
+								providerAddress = policySettings.ProviderAddress
+							}
 						}
 					}
+					if len(providerAddress) == 0 {
+								glog.Errorf("Could not find provider address for %s", ep.ip)
+					}
+					hnsEndpoint := &hcsshim.HNSEndpoint{
+						MacAddress: conjureMac("02-11", net.ParseIP(ep.ip)),
+						IPAddress:  net.ParseIP(ep.ip),
+					}
+
+					paPolicy := hcsshim.PaPolicy{
+					Type: hcsshim.PA,
+					PA:   providerAddress,
+					}
+
+					paPolicyJson, err := json.Marshal(paPolicy)
+					if err != nil {
+						glog.Errorf("PA Policy creation failed for remote endpoint: %v", err)
+						continue
+					}
+					hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
+
+					newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
+					if err != nil {
+						glog.Errorf("Remote endpoint creation failed: %v, %s", err, spew.Sdump(hnsEndpoint))
+						
+					}
+					continue
 				}
-				if len(providerAddress) == 0 {
-							glog.Errorf("Could not find provider address for %s", ep.ip)
-				}
+
 				hnsEndpoint := &hcsshim.HNSEndpoint{
-					MacAddress: conjureMac("02-11", net.ParseIP(ep.ip)),
+					MacAddress: ep.macAddress,
 					IPAddress:  net.ParseIP(ep.ip),
 				}
 
-				paPolicy := hcsshim.PaPolicy{
-				Type: hcsshim.PA,
-				PA:   providerAddress,
-				}
-
-				paPolicyJson, err := json.Marshal(paPolicy)
-				if err != nil {
-					glog.Errorf("PA Policy creation failed for remote endpoint: %v", err)
-					continue
-				}
-				hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
-
 				newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
 				if err != nil {
-					glog.Errorf("Remote endpoint creation failed: %v, %s", err, spew.Sdump(hnsEndpoint))
+					glog.Errorf("Remote endpoint creation failed: %v", err)
 					continue
 				}
 			}
@@ -1137,7 +1165,7 @@ func (proxier *Proxier) syncProxyRules() {
 		hnsLoadBalancer, err = getHnsLoadBalancer(
 			hnsEndpoints,
 			false,
-			true,
+			isDSR,
 			proxier.sourceVip,
 			svcInfo.clusterIP.String(),
 			Enum(svcInfo.protocol),
