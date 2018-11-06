@@ -176,6 +176,10 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 		"A string slice of values which specify the addresses to use for NodePorts. Values may be valid IP blocks (e.g. 1.2.3.0/24, 1.2.3.4/32). The default empty string slice ([]) means to use all local addresses.")
 	fs.Var(flag.NewMapStringBool(&o.config.FeatureGates), "feature-gates", "A set of key=value pairs that describe feature gates for alpha/experimental features. "+
 		"Options are:\n"+strings.Join(utilfeature.DefaultFeatureGate.KnownFeatures(), "\n"))
+	fs.StringVar(&o.config.Winkernel.HostMac, "host-mac", o.config.Winkernel.HostMac, "The MAC address of the host vNIC.")
+	fs.StringVar(&o.config.Winkernel.SourceVip, "source-vip", o.config.Winkernel.SourceVip, "The IP address of the source VIP for non-DSR.")
+	fs.StringVar(&o.config.Winkernel.HNSNetworkName, "network-name", o.config.Winkernel.HNSNetworkName, "The name of the cluster network.")
+	fs.BoolVar(&o.config.Winkernel.EnableDSR, "enable-dsr", o.config.Winkernel.EnableDSR, "If true make kube-proxy apply DSR policies for service VIP")
 }
 
 func NewOptions() *Options {
