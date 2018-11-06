@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/Microsoft/hcsshim"
+	"github.com/Microsoft/hcsshim/hcn"
+
 	"github.com/davecgh/go-spew/spew"
 	"github.com/golang/glog"
 
@@ -40,6 +42,7 @@ import (
 	apiservice "k8s.io/kubernetes/pkg/api/v1/service"
 	"k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/proxy"
+	"k8s.io/kubernetes/pkg/proxy/apis/config"
 	"k8s.io/kubernetes/pkg/proxy/healthcheck"
 	"k8s.io/kubernetes/pkg/util/async"
 )
@@ -100,7 +103,7 @@ type serviceInfo struct {
 	hnsID                    string
 	nodePorthnsID            string
 	policyApplied            bool
-	remoteEndpoints          []*endpointsInfo
+	remoteEndpoint           *endpointsInfo
 }
 
 type hnsNetworkInfo struct {
@@ -421,10 +424,10 @@ type Proxier struct {
 	// precomputing some number of those and cache for future reuse.
 	precomputedProbabilities []string
 
-	network     hnsNetworkInfo
-	sourceVip   string
-	serviceVips map[string]*endpointsInfo
-	hostMac     string
+	network   hnsNetworkInfo
+	sourceVip string
+	hostMac   string
+	isDSR     bool
 }
 
 type localPort struct {
@@ -469,6 +472,7 @@ func NewProxier(
 	nodeIP net.IP,
 	recorder record.EventRecorder,
 	healthzServer healthcheck.HealthzUpdater,
+	config config.KubeProxyWinkernelConfiguration,
 ) (*Proxier, error) {
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x/%#08x", masqueradeValue, masqueradeValue)
@@ -487,19 +491,72 @@ func NewProxier(
 	// TODO : Make this a param
 	hnsNetworkName := os.Getenv("KUBE_NETWORK")
 	if len(hnsNetworkName) == 0 {
-		return nil, fmt.Errorf("Environment variable KUBE_NETWORK not initialized")
+		glog.V(3).Infof("Environment variable KUBE_NETWORK not initialized")
+		hnsNetworkName = config.NetworkName
+		if len(hnsNetworkName) == 0 {
+			return nil, fmt.Errorf("network-name flag not set")
+		}
 	}
-	hnsNetwork, err := getHnsNetworkInfo(hnsNetworkName)
+	hnsNetwork, err := hcsshim.GetHNSNetworkByName(hnsNetworkName)
 	if err != nil {
-		glog.Fatalf("Unable to find Hns Network specified by %s. Please check environment variable KUBE_NETWORK", hnsNetworkName)
+		glog.Fatalf("Unable to find Hns Network specified by %s. Please check environment variable KUBE_NETWORK or network-name flag", hnsNetworkName)
 		return nil, err
 	}
+	hnsNetworkInfo, err := getHnsNetworkInfo(hnsNetworkName)
 
 	glog.V(1).Infof("Hns Network loaded with info = %v", hnsNetwork)
+	var isDSR bool
+	isDSR = config.EnableDSR
 
-	sourceVip := os.Getenv("SOURCE_VIP")
-	hostMac := os.Getenv("HOST_MAC")
-	
+	var sourceVip string
+	var hostMac string
+	if hnsNetwork.Type == "Overlay" {
+		supportedFeatures := hcn.GetSupportedFeatures()
+		if !supportedFeatures.Api.V2 {
+			return nil, fmt.Errorf("Overlay is only supported on RS5 or greater")
+		}
+		sourceVip = config.SourceVip
+		if len(sourceVip) == 0 {
+			return nil, fmt.Errorf("source-vip flag not set")
+		}
+
+		interfaces, _ := net.Interfaces()
+		for _, inter := range interfaces {
+			addresses, _ := inter.Addrs()
+			for _, addr := range addresses {
+				addrIP, _, _ := net.ParseCIDR(addr.String())
+				if addrIP.String() == nodeIP.String() {
+					glog.V(2).Infof("Host MAC address is %s", inter.HardwareAddr.String())
+					hostMac = inter.HardwareAddr.String()
+				}
+			}
+		}
+		if len(hostMac) == 0 {
+			return nil, fmt.Errorf("Could not find host mac address for %s", nodeIP)
+		}
+
+		existingSourceVip, _ := getHnsEndpointByIpAddress(net.ParseIP(sourceVip), hnsNetworkName)
+		if existingSourceVip == nil {
+			hnsEndpoint := &hcsshim.HNSEndpoint{
+				MacAddress: hostMac,
+				IPAddress:  net.ParseIP(sourceVip),
+			}
+			paPolicy := hcsshim.PaPolicy{
+				Type: hcsshim.PA,
+				PA:   nodeIP.String(),
+			}
+			paPolicyJson, err := json.Marshal(paPolicy)
+			if err != nil {
+				return nil, fmt.Errorf("PA Policy creation failed for service VIP remote endpoint: %v", err)
+			}
+			hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
+			_, err = hnsNetwork.CreateEndpoint(hnsEndpoint)
+			if err != nil {
+				return nil, fmt.Errorf("Source Vip endpoint creation failed: %v", err)
+			}
+		}
+	}
+
 	proxier := &Proxier{
 		portsMap:         make(map[localPort]closeable),
 		serviceMap:       make(proxyServiceMap),
@@ -514,9 +571,10 @@ func NewProxier(
 		recorder:         recorder,
 		healthChecker:    healthChecker,
 		healthzServer:    healthzServer,
-		network:          *hnsNetwork,
+		network:          *hnsNetworkInfo,
 		sourceVip:        sourceVip,
 		hostMac:          hostMac,
+		isDSR:            isDSR,
 	}
 
 	burstSyncs := 2
@@ -544,6 +602,9 @@ func (svcInfo *serviceInfo) cleanupAllPolicies(endpoints []*endpointsInfo) {
 	// Cleanup Endpoints references
 	for _, ep := range endpoints {
 		ep.Cleanup()
+	}
+	if svcInfo.remoteEndpoint != nil {
+		svcInfo.remoteEndpoint.Cleanup()
 	}
 
 	svcInfo.policyApplied = false
@@ -584,7 +645,7 @@ func deleteAllHnsLoadBalancerPolicy() {
 
 // getHnsLoadBalancer returns the LoadBalancer policy resource, if already found.
 // If not, it would create one and return
-func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
+func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, isDSR bool, sourceVip string, vip string, protocol uint16, internalPort uint16, externalPort uint16) (*hcsshim.PolicyList, error) {
 	plists, err := hcsshim.HNSListPolicyListRequest()
 	if err != nil {
 		return nil, err
@@ -614,6 +675,7 @@ func getHnsLoadBalancer(endpoints []hcsshim.HNSEndpoint, isILB bool, sourceVip s
 	lb, err := hcsshim.AddLoadBalancer(
 		endpoints,
 		isILB,
+		isDSR,
 		sourceVip,
 		vip,
 		protocol,
@@ -979,7 +1041,6 @@ func (proxier *Proxier) syncProxyRules() {
 			continue
 		}
 
-
 		hnsNetworkName := proxier.network.name
 		hnsnetwork, err := hcsshim.GetHNSNetworkByName(hnsNetworkName)
 
@@ -989,12 +1050,12 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		if hnsnetwork.Type == "Overlay" {
-			serviceVipEndpoint, err := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
+			serviceVipEndpoint, _ := getHnsEndpointByIpAddress(svcInfo.clusterIP, hnsNetworkName)
 
-			if  serviceVipEndpoint == nil  {
+			if serviceVipEndpoint == nil {
 				hnsEndpoint := &hcsshim.HNSEndpoint{
-				MacAddress: proxier.hostMac,
-				IPAddress:  svcInfo.clusterIP,
+					MacAddress: proxier.hostMac,
+					IPAddress:  svcInfo.clusterIP,
 				}
 
 				paPolicy := hcsshim.PaPolicy{
@@ -1014,7 +1075,6 @@ func (proxier *Proxier) syncProxyRules() {
 					continue
 				}
 
-
 				epInfo := &endpointsInfo{
 					ip:         newHnsEndpoint.IPAddress.String(),
 					isLocal:    false,
@@ -1022,10 +1082,10 @@ func (proxier *Proxier) syncProxyRules() {
 					refCount:   1,
 					hnsID:      newHnsEndpoint.Id,
 				}
-				svcInfo.remoteEndpoints = append(svcInfo.remoteEndpoints, epInfo)	
+				svcInfo.remoteEndpoint = epInfo
 			}
 		}
-		
+
 		var hnsEndpoints []hcsshim.HNSEndpoint
 		glog.V(4).Infof("====Applying Policy for %s====", svcName)
 		// Create Remote endpoints for every endpoint, corresponding to the service
@@ -1066,7 +1126,57 @@ func (proxier *Proxier) syncProxyRules() {
 				}
 
 				if hnsnetwork.Type == "Overlay" {
-					glog.V(2).Info("Not creating remote endpoints for overlay network")
+					networkV2, err := hcn.GetNetworkByName(hnsNetworkName)
+					if err != nil {
+						glog.Errorf("%v", err)
+					}
+
+					var providerAddress string
+					for _, policy := range networkV2.Policies {
+						if policy.Type == hcn.RemoteSubnetRoute {
+							policySettings := hcn.RemoteSubnetRoutePolicySetting{}
+							err = json.Unmarshal(policy.Settings, &policySettings)
+							if err != nil {
+								glog.Infof("Failed to unmarshal settings")
+							}
+							remoteSubnet := policySettings.DestinationPrefix
+
+							_, ipNet, err := net.ParseCIDR(remoteSubnet)
+							if err != nil {
+								glog.Errorf("%v", err)
+							}
+							if ipNet.Contains(net.ParseIP(ep.ip)) {
+								providerAddress = policySettings.ProviderAddress
+							}
+							if ep.ip == policySettings.ProviderAddress {
+								providerAddress = policySettings.ProviderAddress
+							}
+						}
+					}
+					if len(providerAddress) == 0 {
+						glog.Errorf("Could not find provider address for %s", ep.ip)
+					}
+					hnsEndpoint := &hcsshim.HNSEndpoint{
+						MacAddress: conjureMac("02-11", net.ParseIP(ep.ip)),
+						IPAddress:  net.ParseIP(ep.ip),
+					}
+
+					paPolicy := hcsshim.PaPolicy{
+						Type: hcsshim.PA,
+						PA:   providerAddress,
+					}
+
+					paPolicyJson, err := json.Marshal(paPolicy)
+					if err != nil {
+						glog.Errorf("PA Policy creation failed for remote endpoint: %v", err)
+						continue
+					}
+					hnsEndpoint.Policies = append(hnsEndpoint.Policies, paPolicyJson)
+
+					newHnsEndpoint, err = hnsnetwork.CreateRemoteEndpoint(hnsEndpoint)
+					if err != nil {
+						glog.Errorf("Remote endpoint creation failed: %v, %s", err, spew.Sdump(hnsEndpoint))
+					}
 					continue
 				}
 
@@ -1105,9 +1215,10 @@ func (proxier *Proxier) syncProxyRules() {
 		glog.V(4).Infof("Trying to Apply Policies for service %s", spew.Sdump(svcInfo))
 		var hnsLoadBalancer *hcsshim.PolicyList
 
-		hnsLoadBalancer, err := getHnsLoadBalancer(
+		hnsLoadBalancer, err = getHnsLoadBalancer(
 			hnsEndpoints,
 			false,
+			proxier.isDSR,
 			proxier.sourceVip,
 			svcInfo.clusterIP.String(),
 			Enum(svcInfo.protocol),
@@ -1126,6 +1237,7 @@ func (proxier *Proxier) syncProxyRules() {
 		if svcInfo.nodePort > 0 {
 			hnsLoadBalancer, err := getHnsLoadBalancer(
 				hnsEndpoints,
+				false,
 				false,
 				proxier.sourceVip,
 				"", // VIP has to be empty to automatically select the nodeIP
@@ -1148,6 +1260,7 @@ func (proxier *Proxier) syncProxyRules() {
 			hnsLoadBalancer, err = getHnsLoadBalancer(
 				hnsEndpoints,
 				false,
+				false,
 				proxier.sourceVip,
 				externalIp.ip,
 				Enum(svcInfo.protocol),
@@ -1166,6 +1279,7 @@ func (proxier *Proxier) syncProxyRules() {
 			// Try loading existing policies, if already available
 			hnsLoadBalancer, err := getHnsLoadBalancer(
 				hnsEndpoints,
+				false,
 				false,
 				proxier.sourceVip,
 				lbIngressIp.ip,
