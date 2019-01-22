@@ -38,6 +38,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
 	apiservice "k8s.io/kubernetes/pkg/api/v1/service"
 	"k8s.io/kubernetes/pkg/apis/core/v1/helper"
@@ -539,6 +541,9 @@ func NewProxier(
 	var sourceVip string
 	var hostMac string
 	if hnsNetworkInfo.networkType == "Overlay" {
+		if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.WinkernelOverlay) {
+			return nil, fmt.Errorf("WinkernelOverlay feature gate not enabled")
+		}
 		err = hcn.RemoteSubnetSupported()
 		if err != nil {
 			return nil, err
