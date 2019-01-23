@@ -1081,10 +1081,17 @@ func (proxier *Proxier) syncProxyRules() {
 
 			// Save the hnsId for reference
 			LogJson(newHnsEndpoint, "Hns Endpoint resource", 1)
-			hnsEndpoints = append(hnsEndpoints, *newHnsEndpoint)
 			ep.hnsID = newHnsEndpoint.hnsID
 			ep.refCount++
 			Log(ep, "Endpoint resource found", 3)
+
+			if svcInfo.onlyNodeLocalEndpoints {
+				if newHnsEndpoint.isLocal {
+					hnsEndpoints = append(hnsEndpoints, *newHnsEndpoint)
+				}
+			} else {
+				hnsEndpoints = append(hnsEndpoints, *newHnsEndpoint)
+			}
 		}
 
 		klog.V(3).Infof("Associated endpoints [%s] for service [%s]", spew.Sdump(hnsEndpoints), svcName)
