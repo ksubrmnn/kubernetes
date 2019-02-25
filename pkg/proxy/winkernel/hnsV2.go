@@ -207,10 +207,20 @@ func (hns hnsV2) getLoadBalancer(endpoints []endpointsInfo, isILB bool, isDSR bo
 	if len(vip) > 0 {
 		vips = append(vips, vip)
 	}
+
+	lbPortMappingFlags := hcn.LoadBalancerPortMappingFlagsNone
+	if isILB {
+		lbPortMappingFlags |= hcn.LoadBalancerPortMappingFlagsILB
+	}
+
+	lbFlags := hcn.LoadBalancerFlagsNone
+	if isDSR {
+		lbFlags |= hcn.LoadBalancerFlagsDSR
+	}
 	lb, err := hcn.AddLoadBalancer(
 		hnsEndpoints,
-		isILB,
-		isDSR,
+		lbFlags,
+		lbPortMappingFlags,
 		sourceVip,
 		vips,
 		protocol,
