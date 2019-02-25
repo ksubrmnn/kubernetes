@@ -513,7 +513,7 @@ func NewProxier(
 	var hns HostNetworkService
 	hns = hnsV1{}
 	supportedFeatures := hcn.GetSupportedFeatures()
-	if supportedFeatures.RemoteSubnet {
+	if supportedFeatures.Api.V2 {
 		hns = hnsV2{}
 	}
 
