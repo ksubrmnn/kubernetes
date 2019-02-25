@@ -153,98 +153,98 @@
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/hcn",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/cni",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/guestrequest",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/guid",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/hcs",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/hcserror",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/hns",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/interop",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/logfields",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/longpath",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/mergemaps",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/regstate",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/runhcs",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/safefile",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/schema1",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/schema2",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/timeout",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/Microsoft/hcsshim/internal/wclayer",
-			"Comment": "v0.8.3-65-g69ac8d3f7fc10a",
-			"Rev": "69ac8d3f7fc10a0623f3a2655958a1a5bb71f58f"
+			"Comment": "v0.8.6-66-g2af37ca39404be",
+			"Rev": "2af37ca39404be7b472784aca21fb4da52f2d2de"
 		},
 		{
 			"ImportPath": "github.com/NYTimes/gziphandler",
@@ -2542,6 +2542,11 @@
 		{
 			"ImportPath": "github.com/kisielk/sqlstruct",
 			"Rev": "648daed35d49dac24a4bff253b190a80da3ab6a5"
+		},
+		{
+			"ImportPath": "github.com/konsorten/go-windows-terminal-sequences",
+			"Comment": "v1.0.1",
+			"Rev": "5c8c8bd35d3832f5d134ae1e1e375b69a4d25242"
 		},
 		{
 			"ImportPath": "github.com/kr/fs",
